@@ -1,14 +1,29 @@
 import os
-import io
-import boto3
-import pandas as pd
+import sys
+import subprocess
 import logging
 
 # I am configuring the logger for AWS CloudWatch
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# I initialize the S3 client using Lambda's built-in permissions
+# --- THE RUNTIME HACK ---
+# I am dynamically installing the 'zstandard' library into Lambda's temporary 
+# storage (/tmp/) because the AWS Managed Layer for Pandas does not include it.
+# This allows me to decompress the NYC Taxi Parquet files on the fly.
+logger.info("I am installing the missing zstandard codec on the fly...")
+subprocess.check_call([sys.executable, "-m", "pip", "install", "zstandard", "-t", "/tmp/"])
+
+# I am appending the /tmp/ directory to my system path so Python knows where to find the new package
+sys.path.append("/tmp/")
+# ------------------------
+
+# Now I can safely import the data processing libraries that depend on zstandard
+import io
+import boto3
+import pandas as pd
+
+# I initialize the S3 client using Lambda's built-in IAM role permissions
 s3_client = boto3.client('s3')
 
 # I am fetching BOTH bucket names from Environment Variables!
