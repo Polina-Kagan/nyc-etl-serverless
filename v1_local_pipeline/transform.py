@@ -102,7 +102,7 @@ def transform_data(taxi_df, lookup_df):
 def main():
     # Define my files based on the 2025 data we extracted
     year = "2025"
-    month = "01"
+    month = "02"
     
     taxi_key = f"yellow_taxi_{year}_{month}.parquet"
     lookup_key = "taxi_zone_lookup.csv"

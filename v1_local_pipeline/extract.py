@@ -67,7 +67,7 @@ def lookup_exists(bucket_name, s3_key):
 def main():
     # I define the parameters for the dataset I want to extract
     year = "2025"
-    month = "01"
+    month = "02"
     
     taxi_url = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month}.parquet"
     lookup_url = "https://d37ci6vzurychx.cloudfront.net/misc/taxi+_zone_lookup.csv"
