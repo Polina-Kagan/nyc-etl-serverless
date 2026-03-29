@@ -7,43 +7,43 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# --- THE RUNTIME HACK ---
-# I am dynamically installing the 'zstandard' library into Lambda's temporary 
-# storage (/tmp/) because the AWS Managed Layer for Pandas does not include it.
-# This allows me to decompress the NYC Taxi Parquet files on the fly.
-logger.info("I am installing the missing zstandard codec on the fly...")
-subprocess.check_call([sys.executable, "-m", "pip", "install", "zstandard", "-t", "/tmp/"])
+# --- THE RUNTIME HACK (V2) ---
+# PyArrow in the AWS Layer is compiled without C++ zstd support.
+# So, I am dynamically installing 'fastparquet' and 'zstandard' 
+# to bypass PyArrow entirely and decompress the files on the fly!
+logger.info("I am installing fastparquet and zstandard on the fly...")
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install", 
+    "fastparquet", "zstandard", "-t", "/tmp/"
+])
 
-# I am appending the /tmp/ directory to my system path so Python knows where to find the new package
 sys.path.append("/tmp/")
 # ------------------------
 
-# Now I can safely import the data processing libraries that depend on zstandard
 import io
 import boto3
 import pandas as pd
 
-# I initialize the S3 client using Lambda's built-in IAM role permissions
 s3_client = boto3.client('s3')
 
-# I am fetching BOTH bucket names from Environment Variables!
 RAW_BUCKET = os.environ.get('RAW_BUCKET_NAME')
 CURATED_BUCKET = os.environ.get('CURATED_BUCKET_NAME')
 
 def read_parquet_from_s3(bucket, key):
     logger.info(f"Downloading {key} from {bucket}...")
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    return pd.read_parquet(io.BytesIO(response['Body'].read()))
+    # MAGIC HAPPENS HERE: I am forcing Pandas to use the fastparquet engine
+    return pd.read_parquet(io.BytesIO(response['Body'].read()), engine='fastparquet')
 
 def read_csv_from_s3(bucket, key):
     logger.info(f"Downloading {key} from {bucket}...")
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    # Don't forget compression='gzip' because CloudFront compresses the raw file!
     return pd.read_csv(io.BytesIO(response['Body'].read()), compression='gzip')
 
 def write_parquet_to_s3(df, bucket, key):
     logger.info(f"Uploading cleaned data to s3://{bucket}/{key}...")
     out_buffer = io.BytesIO()
+    # I can use pyarrow to write uncompressed/snappy parquet files, it only struggles with reading zstd
     df.to_parquet(out_buffer, index=False)
     s3_client.put_object(Bucket=bucket, Key=key, Body=out_buffer.getvalue())
     logger.info("Upload successful!")
