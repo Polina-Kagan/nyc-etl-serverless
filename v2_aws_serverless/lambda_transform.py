@@ -7,22 +7,26 @@ import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# --- THE RUNTIME HACK (V2) ---
-# PyArrow in the AWS Layer is compiled without C++ zstd support.
-# So, I am dynamically installing 'fastparquet' and 'zstandard' 
-# to bypass PyArrow entirely and decompress the files on the fly!
-logger.info("I am installing fastparquet and zstandard on the fly...")
-subprocess.check_call([
-    sys.executable, "-m", "pip", "install", 
-    "fastparquet", "zstandard", "-t", "/tmp/"
-])
+# --- THE ULTIMATE RUNTIME HACK (Based on my previous successful architecture) ---
+# The default AWS Pandas layer has a crippled PyArrow without zstd support.
+# I am dynamically installing a fresh, fully-featured pyarrow directly into /tmp/
+if not os.path.exists("/tmp/pyarrow"):
+    logger.info("Installing fresh pyarrow and numpy to bypass AWS layer limits...")
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", 
+        "pyarrow==15.0.0", "numpy<2", 
+        "-t", "/tmp/", "--no-cache-dir"
+    ])
 
-sys.path.append("/tmp/")
-# ------------------------
+# MAGIC HAPPENS HERE: I insert /tmp/ at index 0 so Python prioritizes MY pyarrow 
+# over the broken one provided by the AWS environment.
+sys.path.insert(0, "/tmp/")
+# -----------------------------------------------------------------------------
 
 import io
 import boto3
 import pandas as pd
+import pyarrow.parquet as pq
 
 s3_client = boto3.client('s3')
 
@@ -32,8 +36,20 @@ CURATED_BUCKET = os.environ.get('CURATED_BUCKET_NAME')
 def read_parquet_from_s3(bucket, key):
     logger.info(f"Downloading {key} from {bucket}...")
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    # MAGIC HAPPENS HERE: I am forcing Pandas to use the fastparquet engine
-    return pd.read_parquet(io.BytesIO(response['Body'].read()), engine='fastparquet')
+    file_content = response['Body'].read()
+    
+    # I use pyarrow.parquet directly to read the file. 
+    # This C++ implementation is vastly more memory-efficient than other engines.
+    # To prevent OutOfMemory (OOM) errors, I only load the columns I actually need for analytics!
+    columns_to_read = [
+        'passenger_count', 'trip_distance', 'fare_amount', 
+        'tpep_pickup_datetime', 'tpep_dropoff_datetime',
+        'PULocationID', 'DOLocationID', 
+        'tip_amount', 'total_amount'
+    ]
+    
+    table = pq.read_table(io.BytesIO(file_content), columns=columns_to_read)
+    return table.to_pandas()
 
 def read_csv_from_s3(bucket, key):
     logger.info(f"Downloading {key} from {bucket}...")
@@ -43,8 +59,8 @@ def read_csv_from_s3(bucket, key):
 def write_parquet_to_s3(df, bucket, key):
     logger.info(f"Uploading cleaned data to s3://{bucket}/{key}...")
     out_buffer = io.BytesIO()
-    # I can use pyarrow to write uncompressed/snappy parquet files, it only struggles with reading zstd
-    df.to_parquet(out_buffer, index=False)
+    # I explicitly use snappy compression for the curated zone
+    df.to_parquet(out_buffer, index=False, compression='snappy')
     s3_client.put_object(Bucket=bucket, Key=key, Body=out_buffer.getvalue())
     logger.info("Upload successful!")
 
