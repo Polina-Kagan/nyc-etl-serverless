@@ -54,7 +54,8 @@ def read_parquet_from_s3(bucket, key):
 def read_csv_from_s3(bucket, key):
     logger.info(f"Downloading {key} from {bucket}...")
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    return pd.read_csv(io.BytesIO(response['Body'].read()), compression='gzip')
+    # I removed compression='gzip' because the downloaded lookup table is a plain CSV, not an archive!
+    return pd.read_csv(io.BytesIO(response['Body'].read()))
 
 def write_parquet_to_s3(df, bucket, key):
     logger.info(f"Uploading cleaned data to s3://{bucket}/{key}...")
