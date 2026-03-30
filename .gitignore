@@ -3,3 +3,12 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+
+# Terraform generated zip files
+v3_terraform/*.zip
