@@ -1,33 +1,28 @@
 import os
+import json
 import requests
 import boto3
 import logging
 from botocore.exceptions import ClientError
 
-# I am configuring the root logger to send my logs directly to AWS CloudWatch.
+# I am configuring the logger to track my pipeline's execution in AWS CloudWatch
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# I am initializing the S3 client. 
-# Notice that I do NOT use .env anymore. AWS Lambda automatically provides 
-# secure IAM credentials to my code under the hood!
+# I initialize the S3 client to save files, and the Lambda client to trigger the next step
 s3_client = boto3.client('s3')
+lambda_client = boto3.client('lambda')
 
-# I am dynamically fetching my bucket name from Lambda's Environment Variables.
-# This makes my code reusable across different environments (dev, prod).
+# I dynamically fetch my raw bucket name from the environment variables
 RAW_BUCKET_NAME = os.environ.get('RAW_BUCKET_NAME')
 
 def upload_to_s3_from_url(url, bucket_name, s3_key):
-    """
-    I am streaming the file from the internet directly to S3.
-    This prevents my Lambda function from running out of /tmp storage space.
-    """
+    """I stream the file directly to S3 to avoid filling up Lambda's memory."""
     logger.info(f"I am starting to stream data from {url}...")
     try:
         response = requests.get(url, stream=True)
         response.raise_for_status() 
-
-        # I use upload_fileobj for smart, memory-efficient multipart uploads
+        
         s3_client.upload_fileobj(
             Fileobj=response.raw,
             Bucket=bucket_name,
@@ -39,10 +34,7 @@ def upload_to_s3_from_url(url, bucket_name, s3_key):
         raise
 
 def lookup_exists(bucket_name, s3_key):
-    """
-    I am checking if the dimension table is already in my S3 bucket
-    to ensure my Lambda function is idempotent.
-    """
+    """I check if the dimension table already exists so I don't download it twice."""
     try:
         s3_client.head_object(Bucket=bucket_name, Key=s3_key)
         return True
@@ -52,14 +44,9 @@ def lookup_exists(bucket_name, s3_key):
         raise
 
 def lambda_handler(event, context):
-    """
-    This is the main entry point for my AWS Lambda function.
-    It expects an 'event' dictionary which can contain parameters.
-    """
-    # I am extracting the year and month from the event trigger.
-    # If they are not provided, I default to March 2025.
+    """The main entry point for my Extract Lambda."""
     year = event.get("year", "2025")
-    month = event.get("month", "03")
+    month = event.get("month", "02")
     
     taxi_url = f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month}.parquet"
     lookup_url = "https://d37ci6vzurychx.cloudfront.net/misc/taxi+_zone_lookup.csv"
@@ -67,7 +54,7 @@ def lambda_handler(event, context):
     taxi_s3_key = f"yellow_taxi_{year}_{month}.parquet"
     lookup_s3_key = "taxi_zone_lookup.csv"
 
-    # Step 1: Handle the Lookup Table
+    # Step 1: Ensure the lookup table is in the raw zone
     logger.info("Checking if the taxi zone lookup table exists...")
     if lookup_exists(RAW_BUCKET_NAME, lookup_s3_key):
         logger.info("Lookup table found in S3. Skipping download.")
@@ -75,12 +62,31 @@ def lambda_handler(event, context):
         logger.info("Lookup table not found. Downloading...")
         upload_to_s3_from_url(lookup_url, RAW_BUCKET_NAME, lookup_s3_key)
 
-    # Step 2: Handle the Taxi Fact Table
+    # Step 2: Download the main fact table
     logger.info(f"Downloading taxi trips fact table for {year}-{month}...")
     upload_to_s3_from_url(taxi_url, RAW_BUCKET_NAME, taxi_s3_key)
 
-    # I return a standard HTTP response to signal a successful execution
+    # Step 3: THE ORCHESTRATION MAGIC
+    # Instead of relying on unpredictable S3 triggers (which can cause race conditions 
+    # and double-invocations when multiple files arrive), I am taking control.
+    # I prepare the exact payload my Transform Lambda needs.
+    transform_payload = {
+        "year": year,
+        "month": month
+    }
+    
+    logger.info("Extract completed. I am now invoking the Transform Lambda...")
+    
+    # I use InvocationType='Event' for an asynchronous call.
+    # This means I just shout "Go!" to the next Lambda and immediately finish my job,
+    # without waiting for it to finish. This saves execution time and money!
+    lambda_client.invoke(
+        FunctionName='nyc-transform-pipeline',
+        InvocationType='Event',
+        Payload=json.dumps(transform_payload)
+    )
+
     return {
         'statusCode': 200,
-        'body': f'Extract pipeline successfully completed for {year}-{month}!'
+        'body': f'Extract pipeline finished! Transform Lambda successfully invoked for {year}-{month}.'
     }
