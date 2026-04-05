@@ -72,4 +72,9 @@ To tear down the infrastructure and avoid AWS charges:
 terraform destroy
 ```
 
+## Baseline Performance Metrics (v1.0)
+- **Processing Speed:** ~3.4 million rows processed in < 10 seconds.
+- **Memory Optimization:** Successfully utilized PyArrow/Pandas within AWS Lambda (Max memory used: ~1.3 GB out of 2.0 GB allocated).
+- **Data Compression:** S3 storage footprint maintained efficiently using Parquet format.
+
 
